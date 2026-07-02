@@ -2,8 +2,55 @@ import { OpenAI } from "openai";
 import { buildAnalysisPrompt, REPAIR_PROMPT, SYSTEM_PROMPT } from "./prompts";
 import { AnalyzeResponse, analyzeResponseSchema } from "./schemas";
 
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const SILICONFLOW_API_KEY = process.env.SILICONFLOW_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+async function callDeepSeek(
+  jobDescription: string,
+  resumeText: string,
+  jobTitle?: string
+): Promise<string> {
+  if (!DEEPSEEK_API_KEY) {
+    throw new Error("DeepSeek API key not configured");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: buildAnalysisPrompt(jobDescription, resumeText, jobTitle),
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 2000,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`DeepSeek HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function callSiliconFlow(
   jobDescription: string,
@@ -15,7 +62,7 @@ async function callSiliconFlow(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 15000);
 
   try {
     const response = await fetch("https://api.siliconflow.cn/v1/chat/completions", {
@@ -40,7 +87,8 @@ async function callSiliconFlow(
     });
 
     if (!response.ok) {
-      throw new Error(`SiliconFlow HTTP ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`SiliconFlow HTTP ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
@@ -97,14 +145,28 @@ export async function analyzeWithLLM(
   jobTitle?: string
 ): Promise<AnalyzeResponse> {
   let rawContent = "";
-  let usedFallback = false;
+  let lastError: Error | null = null;
 
-  try {
-    rawContent = await callSiliconFlow(jobDescription, resumeText, jobTitle);
-  } catch (err) {
-    console.warn("SiliconFlow failed, falling back to OpenAI:", err);
-    rawContent = await callOpenAI(jobDescription, resumeText, jobTitle);
-    usedFallback = true;
+  // Try providers in order: DeepSeek → SiliconFlow → OpenAI
+  const providers = [
+    { name: "DeepSeek", call: () => callDeepSeek(jobDescription, resumeText, jobTitle) },
+    { name: "SiliconFlow", call: () => callSiliconFlow(jobDescription, resumeText, jobTitle) },
+    { name: "OpenAI", call: () => callOpenAI(jobDescription, resumeText, jobTitle) },
+  ];
+
+  for (const provider of providers) {
+    try {
+      rawContent = await provider.call();
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn(`${provider.name} failed:`, lastError.message);
+    }
+  }
+
+  if (lastError) {
+    throw new Error("LLM_UNAVAILABLE");
   }
 
   try {
@@ -112,37 +174,21 @@ export async function analyzeWithLLM(
   } catch (parseErr) {
     console.warn("Initial parse failed, attempting repair:", parseErr);
 
-    // One repair attempt
+    // One repair attempt using any available provider
     try {
-      const repairClient = new OpenAI({ apiKey: OPENAI_API_KEY || "" });
-      const repairResponse = await repairClient.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: buildAnalysisPrompt(jobDescription, resumeText, jobTitle),
-          },
-          {
-            role: "assistant",
-            content: rawContent,
-          },
-          { role: "user", content: REPAIR_PROMPT },
-        ],
-        temperature: 0,
-        max_tokens: 2000,
-        response_format: { type: "json_object" },
-      });
-
-      const repairContent = repairResponse.choices[0].message.content || "";
+      let repairContent = "";
+      for (const provider of providers) {
+        try {
+          repairContent = await provider.call();
+          break;
+        } catch {
+          continue;
+        }
+      }
       return parseResult(repairContent);
     } catch (repairErr) {
       console.error("Repair parse failed:", repairErr);
-      throw new Error(
-        usedFallback
-          ? "LLM_UNAVAILABLE"
-          : "PARSE_ERROR"
-      );
+      throw new Error("PARSE_ERROR");
     }
   }
 }
