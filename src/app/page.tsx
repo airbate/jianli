@@ -1,65 +1,186 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState } from "react";
+import Link from "next/link";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AnalysisForm } from "@/components/analysis-form";
+import { ScoreCard } from "@/components/score-card";
+import { MissingKeywords } from "@/components/missing-keywords";
+import { RewriteSuggestions } from "@/components/rewrite-suggestions";
+import { QuotaModal } from "@/components/quota-modal";
+import { AnalyzeResponse, ApiErrorResponse } from "@/lib/schemas";
+import { AlertCircle, CheckCircle2, Shield, Lock } from "lucide-react";
+
+function isApiError(data: AnalyzeResponse | ApiErrorResponse): data is ApiErrorResponse {
+  return "error" in data;
+}
+
+export default function HomePage() {
+  const [jobDescription, setJobDescription] = useState("");
+  const [resumeText, setResumeText] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showQuotaModal, setShowQuotaModal] = useState(false);
+  const [bonusEmail, setBonusEmail] = useState("");
+  const [quotaLoading, setQuotaLoading] = useState(false);
+
+  async function handleAnalyze(email?: string) {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobDescription,
+          resumeText,
+          jobTitle: jobTitle || undefined,
+          email,
+        }),
+      });
+
+      const data: AnalyzeResponse | ApiErrorResponse = await response.json();
+
+      if (isApiError(data)) {
+        if (data.error === "FREE_LIMIT_REACHED") {
+          setShowQuotaModal(true);
+          setLoading(false);
+          return;
+        }
+        setError(data.message);
+        setResult(null);
+      } else {
+        setResult(data);
+        setShowQuotaModal(false);
+      }
+    } catch (err) {
+      setError("Network error. Please try again.");
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleUnlockBonus() {
+    setQuotaLoading(true);
+    await handleAnalyze(bonusEmail);
+    setQuotaLoading(false);
+  }
+
+  function handleReset() {
+    setResult(null);
+    setError(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex min-h-full flex-col">
+      <header className="border-b bg-background/95 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
+          <Link href="/" className="text-lg font-bold tracking-tight">
+            ATS Match Checker
+          </Link>
+          <nav className="flex gap-4 text-sm text-muted-foreground">
+            <Link href="/privacy" className="hover:text-foreground">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-foreground">
+              Terms
+            </Link>
+          </nav>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </header>
+
+      <main className="flex-1">
+        <section className="bg-gradient-to-b from-muted/50 to-background px-4 py-12 md:py-16">
+          <div className="mx-auto max-w-6xl text-center">
+            <h1 className="text-3xl font-extrabold tracking-tight md:text-5xl">
+              Will Your Resume Pass the ATS?
+            </h1>
+            <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
+              Paste any job description and your resume. Get your match score,
+              missing keywords, and rewrite suggestions in 30 seconds.
+            </p>
+            <div className="mx-auto mt-4 flex max-w-xl flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <CheckCircle2 className="h-4 w-4 text-green-600" /> Free
+              </span>
+              <span className="flex items-center gap-1">
+                <CheckCircle2 className="h-4 w-4 text-green-600" /> No signup
+              </span>
+              <span className="flex items-center gap-1">
+                <Lock className="h-4 w-4 text-green-600" /> No PDF uploads
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section className="px-4 py-8 md:py-12">
+          <div className="mx-auto max-w-6xl">
+            {!result ? (
+              <>
+                {error && (
+                  <Alert variant="destructive" className="mb-6">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <AnalysisForm
+                  jobDescription={jobDescription}
+                  setJobDescription={setJobDescription}
+                  resumeText={resumeText}
+                  setResumeText={setResumeText}
+                  jobTitle={jobTitle}
+                  setJobTitle={setJobTitle}
+                  onSubmit={() => handleAnalyze()}
+                  loading={loading}
+                />
+              </>
+            ) : (
+              <div className="space-y-6">
+                <ScoreCard score={result.matchScore} label={result.scoreLabel} />
+                <MissingKeywords keywords={result.missingKeywords} />
+                <RewriteSuggestions rewrites={result.suggestedRewrites} />
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <p className="font-medium">Summary</p>
+                  <p className="mt-1 text-muted-foreground">{result.summary}</p>
+                </div>
+                <button
+                  onClick={handleReset}
+                  className="text-sm font-medium text-primary hover:underline"
+                >
+                  Check another job →
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
       </main>
+
+      <footer className="border-t bg-muted/30 px-4 py-8">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 md:flex-row">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Shield className="h-4 w-4" />
+            No resume data is stored. Analysis only.
+          </div>
+          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+            <Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link>
+            <Link href="/terms" className="hover:text-foreground">Terms of Service</Link>
+          </div>
+        </div>
+      </footer>
+
+      <QuotaModal
+        open={showQuotaModal}
+        email={bonusEmail}
+        setEmail={setBonusEmail}
+        onSubmit={handleUnlockBonus}
+        loading={quotaLoading}
+      />
     </div>
   );
 }
